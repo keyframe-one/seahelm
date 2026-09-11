@@ -347,6 +347,40 @@ final class WorktreeDeleterTests: XCTestCase {
 
     // MARK: - Helpers
 
+    // MARK: - Worktree whose folder is gone
+
+    /// Git keeps a worktree's record after its folder is deleted by hand (or a
+    /// purged /tmp). Delete must clear that record, or the worktree comes back
+    /// on every launch.
+    func testDeleteWorktreeWhoseFolderIsGoneClearsGitsRecord() throws {
+        let worktreePath = createWorktree(branch: "folder-gone")
+        try FileManager.default.removeItem(atPath: worktreePath)
+
+        try WorktreeDeleter.deleteWorktree(
+            worktreePath: worktreePath,
+            repoPath: repoPath,
+            branchName: "folder-gone",
+            deleteBranch: false,
+            force: false
+        )
+
+        let list = git(["worktree", "list", "--porcelain"], in: repoPath)
+        XCTAssertFalse(list.contains(lastPathComponent(worktreePath)), "git must no longer list the worktree")
+        XCTAssertFalse(git(["branch", "--list", "folder-gone"], in: repoPath).isEmpty, "the branch is kept")
+    }
+
+    func testAssessmentOfAWorktreeWhoseFolderIsGoneIsSafeAndKeepsItsBranch() throws {
+        let worktreePath = createWorktree(branch: "folder-gone-assess")
+        try FileManager.default.removeItem(atPath: worktreePath)
+
+        let assessment = WorktreeDeleter.assessDeletion(
+            worktreePath: worktreePath, repoPath: repoPath,
+            branchName: "folder-gone-assess", recordedBase: nil)
+
+        XCTAssertTrue(assessment.isSafe, "nothing on disk is left to lose")
+        XCTAssertFalse(assessment.deletesBranch, "its commits can't be measured, so the branch stays")
+    }
+
     private func createTestRepo() {
         let fm = FileManager.default
         try? fm.createDirectory(atPath: repoPath, withIntermediateDirectories: true)

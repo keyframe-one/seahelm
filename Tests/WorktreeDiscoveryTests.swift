@@ -167,6 +167,65 @@ final class WorktreeDiscoveryTests: XCTestCase {
         XCTAssertEqual(p.terminationStatus, 0, "git \(args.joined(separator: " ")) failed")
     }
 
+    // MARK: - Prunable worktrees
+
+    func testParseMarksAPrunableWorktree() {
+        let output = """
+        worktree /Users/dev/project
+        HEAD abc1234567890
+        branch refs/heads/main
+
+        worktree /private/tmp/gone
+        HEAD def4567890123
+        branch refs/heads/gone
+        prunable gitdir file points to non-existent location
+
+        """
+        let worktrees = WorktreeDiscovery.parsePorcelain(output)
+        XCTAssertEqual(worktrees.count, 2, "parsing keeps it; discover is what hides it")
+        XCTAssertFalse(worktrees[0].isPrunable)
+        XCTAssertTrue(worktrees[1].isPrunable)
+        XCTAssertEqual(worktrees[1].branch, "gone")
+    }
+
+    func testPrunableDoesNotLeakIntoNextEntry() {
+        let output = """
+        worktree /Users/dev/project
+        HEAD abc1234567890
+        branch refs/heads/main
+
+        worktree /private/tmp/gone
+        HEAD def4567890123
+        detached
+        prunable
+
+        worktree /Users/dev/project-live
+        HEAD 0123456789abc
+        branch refs/heads/live
+
+        """
+        let worktrees = WorktreeDiscovery.parsePorcelain(output)
+        XCTAssertEqual(worktrees.map(\.isPrunable), [false, true, false])
+    }
+
+    /// The bug: a worktree whose folder was deleted stays in `git worktree list`,
+    /// so it came back as a row — with a fresh session — on every launch.
+    func testDiscoverHidesAWorktreeWhoseFolderIsGone() throws {
+        let base = try makeTempGitRepo()
+        let root = base.deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gone = root.appendingPathComponent("wt-gone")
+        let live = root.appendingPathComponent("wt-live")
+        try runGit(["worktree", "add", gone.path, "-b", "gone"], in: base.path)
+        try runGit(["worktree", "add", live.path, "-b", "live"], in: base.path)
+        try FileManager.default.removeItem(at: gone)
+
+        let discovered = WorktreeDiscovery.discover(repoPath: base.path)
+        XCTAssertFalse(discovered.map(\.branch).contains("gone"), "a worktree with no folder must not come back as a row")
+        XCTAssertTrue(discovered.map(\.branch).contains("live"))
+        XCTAssertEqual(discovered.first?.isMainWorktree, true)
+    }
+
     // MARK: - Display Name
 
     func testDisplayName_MainWorktree() {

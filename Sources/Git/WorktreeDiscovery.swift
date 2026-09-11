@@ -9,19 +9,25 @@ struct WorktreeInfo {
     /// A worktree sitting on a commit rather than a branch. Rare by hand, but
     /// the normal state for a jj workspace, which is anonymous by design.
     let isDetached: Bool
+    /// Git still lists the worktree but its folder is gone (`prunable` in the
+    /// porcelain output) — deleted by hand, or a purged `/tmp`. `discover`
+    /// hides these.
+    let isPrunable: Bool
 
     init(
         path: String,
         branch: String,
         commitHash: String,
         isMainWorktree: Bool,
-        isDetached: Bool = false
+        isDetached: Bool = false,
+        isPrunable: Bool = false
     ) {
         self.path = path
         self.branch = branch
         self.commitHash = commitHash
         self.isMainWorktree = isMainWorktree
         self.isDetached = isDetached
+        self.isPrunable = isPrunable
     }
 
     var displayName: String {
@@ -157,7 +163,14 @@ enum WorktreeDiscovery {
             NSLog("git worktree list timed out or failed at \(repoPath)")
             return []
         }
-        return parsePorcelain(output)
+        // A worktree whose folder is gone stays in `git worktree list` until it
+        // is pruned. Listing it rebuilt a dead row — and a fresh pane and zmx
+        // session for it — on every launch, and its Delete could not work from
+        // a folder that does not exist, so it came back however often it was
+        // removed. Hidden rather than pruned: a worktree on an unplugged drive
+        // is prunable too, and comes back when the drive does. Git never marks
+        // a locked worktree prunable, so those stay listed.
+        return parsePorcelain(output).filter { !$0.isPrunable }
     }
 
     /// Parse `git worktree list --porcelain` output
@@ -195,6 +208,7 @@ enum WorktreeDiscovery {
         var currentCommit = ""
         var isMainWorktree = false
         var isDetached = false
+        var isPrunable = false
 
         for line in output.components(separatedBy: "\n") {
             if line.isEmpty {
@@ -205,7 +219,8 @@ enum WorktreeDiscovery {
                         branch: currentBranch,
                         commitHash: currentCommit,
                         isMainWorktree: isMainWorktree,
-                        isDetached: isDetached
+                        isDetached: isDetached,
+                        isPrunable: isPrunable
                     ))
                 }
                 currentPath = nil
@@ -213,6 +228,7 @@ enum WorktreeDiscovery {
                 currentCommit = ""
                 isMainWorktree = false
                 isDetached = false
+                isPrunable = false
             } else if line.hasPrefix("worktree ") {
                 currentPath = String(line.dropFirst("worktree ".count))
                     .trimmingCharacters(in: .whitespaces)
@@ -238,6 +254,10 @@ enum WorktreeDiscovery {
                 // in `displayName`, and it makes every detached worktree look
                 // like the same one to anything matching on branch name.
                 isDetached = true
+            } else if line == "prunable" || line.hasPrefix("prunable ") {
+                // Followed by git's reason, e.g. "gitdir file points to
+                // non-existent location".
+                isPrunable = true
             }
         }
 
@@ -248,7 +268,8 @@ enum WorktreeDiscovery {
                 branch: currentBranch,
                 commitHash: currentCommit,
                 isMainWorktree: isMainWorktree,
-                isDetached: isDetached
+                isDetached: isDetached,
+                isPrunable: isPrunable
             ))
         }
 

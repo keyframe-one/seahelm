@@ -260,6 +260,7 @@ class MainWindowController: NSWindowController {
         let tc = TabCoordinator(config: config)
         tc.delegate = self
         tc.terminalCoordinator = terminalCoordinator
+        terminalCoordinator.repoRootForWorktree = { [weak tc] path in tc?.worktreeRepoCache[path] }
         tc.statusPublisher = statusPublisher
         tc.statusAggregator = statusAggregator
         tc.runtimeBackend = runtimeBackend

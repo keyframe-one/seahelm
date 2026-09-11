@@ -158,6 +158,13 @@ enum WorktreeDeleter {
         recordedBase: String?,
         refreshBase: Bool = false
     ) -> WorktreeDeleteAssessment {
+        // Folder already gone: nothing on disk is left to lose, and there is no
+        // checkout to measure the branch's commits from. Nothing to warn about,
+        // and the branch is kept rather than judged blind. An unreachable path
+        // (nil — a stalled volume) gets the normal assessment.
+        if FileSystemProbe.existsIfKnown(worktreePath) == false {
+            return WorktreeDeleteAssessment(losses: [], deletesBranch: false)
+        }
         var losses: [String] = []
         if hasUncommittedChanges(worktreePath: worktreePath) {
             losses.append("It has uncommitted changes that will be lost.")

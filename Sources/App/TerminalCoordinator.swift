@@ -27,6 +27,11 @@ class TerminalCoordinator {
     /// Provided by MainWindowController via DashboardViewController.
     var activeSplitContainer: () -> SplitContainerView?
 
+    /// The repo a worktree belongs to, as the dashboard recorded it at
+    /// discovery. Deleting needs it once the worktree's folder is gone: git
+    /// cannot be asked from inside a folder that does not exist. Main thread.
+    var repoRootForWorktree: ((String) -> String?)?
+
     init(config: Config, activeSplitContainer: @escaping () -> SplitContainerView?) {
         self.config = config
         self.activeSplitContainer = activeSplitContainer
@@ -679,11 +684,14 @@ class TerminalCoordinator {
             : nil
 
         onPendingChange?(true)
+        // Read on main, where the dashboard keeps it: `findRepoRoot` only works
+        // from a worktree folder that still exists.
+        let knownRepoPath = repoRootForWorktree?(info.path)
         // Several synchronous git subprocesses (up to a 5s timeout each on a
         // wedged repo, plus a fetch of the base) — run them off the main
         // thread, then decide.
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let repoPath = WorktreeDiscovery.findRepoRoot(from: info.path) ?? info.path
+            let repoPath = knownRepoPath ?? WorktreeDiscovery.findRepoRoot(from: info.path) ?? info.path
             let assessment = isIntegration
                 ? IntegrationWorktree.assessDeletion(path: info.path, repoPath: repoPath, expectedHead: expectedHead)
                 : WorktreeDeleter.assessDeletion(worktreePath: info.path, repoPath: repoPath,
@@ -738,9 +746,10 @@ class TerminalCoordinator {
                                       deleteBranch: Bool = false, force: Bool = false,
                                       onPendingChange: ((Bool) -> Void)? = nil) {
         let info = WorktreeInfo(path: path, branch: branch, commitHash: "", isMainWorktree: false)
+        let knownRepoPath = repoRootForWorktree?(path)
         onPendingChange?(true)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let repoPath = WorktreeDiscovery.findRepoRoot(from: path) ?? path
+            let repoPath = knownRepoPath ?? WorktreeDiscovery.findRepoRoot(from: path) ?? path
             // If the caller didn't request force, check for uncommitted changes and
             // force-remove so git doesn't refuse on a dirty worktree.
             let shouldForce = force || WorktreeDeleter.hasUncommittedChanges(worktreePath: path)
