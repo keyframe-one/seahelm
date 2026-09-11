@@ -74,9 +74,18 @@ final class SplitNodeTests: XCTestCase {
 
     func testNextPaneIndex_WithExistingPanes() {
         let left = SplitNode.leaf(id: "a", stationId: "s1", paneSessionKey: "seahelm-repo-main")
-        let right = SplitNode.leaf(id: "b", stationId: "s2", paneSessionKey: "seahelm-repo-main-1")
+        let right = SplitNode.leaf(id: "b", stationId: "s2", paneSessionKey: "seahelm-repo-main--pane-1")
         let split = SplitNode.split(id: "s", axis: .horizontal, ratio: 0.5, first: left, second: right)
         XCTAssertEqual(split.nextPaneIndex(baseName: "seahelm-repo-main"), 2)
+    }
+
+    /// Extra panes are named `<base>--pane-N` since the collision fix; a legacy
+    /// `<base>-N` name no longer counts toward the numbering.
+    func testNextPaneIndex_IgnoresLegacyDashSuffix() {
+        let left = SplitNode.leaf(id: "a", stationId: "s1", paneSessionKey: "seahelm-repo-main")
+        let right = SplitNode.leaf(id: "b", stationId: "s2", paneSessionKey: "seahelm-repo-main-1")
+        let split = SplitNode.split(id: "s", axis: .horizontal, ratio: 0.5, first: left, second: right)
+        XCTAssertEqual(split.nextPaneIndex(baseName: "seahelm-repo-main"), 1)
     }
 }
 
