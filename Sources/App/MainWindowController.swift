@@ -100,14 +100,12 @@ class MainWindowController: NSWindowController {
     // Vibe-island notch overlay
     private let islandController = IslandPanelController()
     private var islandRefreshTimer: Timer?
-    private var islandSeenSuggestions = SuggestionSeenSet()
-    /// Suggestion orders already surfaced through the First Mate sidebar. Tracked
-    /// separately from `islandSeenSuggestions`: the island's set is also advanced by
-    /// its 10s fallback timer, which would eat the "new order" edge this needs.
+    /// Suggestion orders already surfaced through the First Mate sidebar, so each
+    /// new order reveals it once.
     private var revealedSuggestions = SuggestionSeenSet()
     /// Cards already mirrored to chat. Its own set: a card the island has shown
     /// still has to reach the phone, and the phone must not be sent the same
-    /// question twice because the desktop happened to re-pop it.
+    /// question twice because the desktop showed it again.
     private var chatSeenCards = SuggestionSeenSet()
     /// Where each card's buttons are drawn right now, so they can be taken down
     /// when the card goes — answered on the Mac, or the agent moved past it.
@@ -292,9 +290,9 @@ class MainWindowController: NSWindowController {
         pub.aggregator = statusAggregator
         NotificationManager.shared.stabilityDelay = config.notifications.stabilityDelay
         NotificationManager.shared.cooldown = config.notifications.cooldown
-        // The island popping open with this pane's suggestion card already told
-        // the user, better than a banner can — it carries the buttons. Only
-        // while it is actually expanded: a collapsed pill has said nothing.
+        // An island the user opened on this pane's suggestion card already told
+        // them, better than a banner can — it carries the buttons. Only while it
+        // is actually expanded: a collapsed pill has said nothing.
         NotificationManager.shared.isCardOnScreen = { [weak self] terminalID in
             guard let self, self.islandController.model.isOpened else { return false }
             return self.islandController.model.orders.contains { $0.action.terminalID == terminalID }
@@ -2216,9 +2214,9 @@ extension MainWindowController {
     /// Surface new suggestions in the First Mate sidebar while Seahelm is frontmost
     /// AND the card belongs to the worktree on screen — dropping a panel over the
     /// notch you are already looking at reads as a glitch, and the sidebar is where
-    /// that card lives anyway. A card from any other worktree goes to the island
-    /// instead (`openForEvent(targetVisible:)`), which is the only surface that can
-    /// show it without navigating the window out from under the user.
+    /// that card lives anyway. A card from any other worktree waits in the island
+    /// (a badge on the pill until the user opens it), which is the only surface that
+    /// can show it without navigating the window out from under the user.
     /// Registered independently of the island so it still works with it disabled.
     private func setupSuggestionReveal() {
         guard NSClassFromString("XCTestCase") == nil else { return }
@@ -2232,7 +2230,7 @@ extension MainWindowController {
         let suggestions = tabCoordinator.pendingOrders.all()
             .filter { $0.action.kind == .suggestNextOrder }
         let fresh = revealedSuggestions.absorb(suggestions)
-        // Only while frontmost: in the background the island already pops, and
+        // Only while frontmost: in the background the island's badge carries it, and
         // re-opening the sidebar on a suggestion the user never saw arrive would
         // rearrange the window behind their back. And only for a card this
         // sidebar can actually show — a suggestion from another worktree is the
@@ -2327,20 +2325,9 @@ extension MainWindowController {
             model.controlChannelWarning = channelWarning
         }
 
-        // A new suggestion is actionable — expand so the card is visible
-        // without hovering. Nothing else opens the island: status changes are
-        // Notification Center's job. Frontmost, this yields to the First Mate
-        // sidebar only for a card that sidebar is actually showing — a
-        // suggestion raised in a worktree that isn't on screen pops here.
+        // A new suggestion only raises the pill's badge count: the island opens
+        // when the user clicks it, never by itself.
         publishCardsToChat(tabCoordinator.pendingOrders.all())
-
-        let fresh = islandSeenSuggestions.absorb(orders)
-        if IslandModel.shouldOpen(for: fresh), !model.isOpened {
-            let targetVisible = fresh.allSatisfy {
-                tabCoordinator.isWorktreeVisible($0.action.worktreePath)
-            }
-            islandController.openForEvent(targetVisible: targetVisible)
-        }
         islandController.updateVisibility()
     }
 

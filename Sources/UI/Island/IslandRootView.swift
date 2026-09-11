@@ -11,7 +11,6 @@ struct IslandRootView: View {
     private static let openAnimation = Animation.spring(response: 0.42, dampingFraction: 0.8)
     /// Critically damped: closing snaps shut with no wobble.
     private static let closeAnimation = Animation.spring(response: 0.45, dampingFraction: 1.0)
-    private static let popAnimation = Animation.spring(response: 0.3, dampingFraction: 0.5)
 
     private static let openedRadii = (top: CGFloat(10), bottom: CGFloat(22))
     private static let closedRadii = (top: CGFloat(5), bottom: CGFloat(14))
@@ -45,7 +44,7 @@ struct IslandRootView: View {
         .background(currentShape.fill(IslandStyle.background))
         .overlay(
             currentShape.stroke(
-                IslandStyle.accent.opacity(model.isOpened ? 0.16 : 0),
+                IslandStyle.accent.opacity(strokeOpacity),
                 lineWidth: 1
             )
         )
@@ -54,8 +53,7 @@ struct IslandRootView: View {
             color: .black.opacity(model.isOpened || hoveringPill ? 0.5 : 0),
             radius: 9, y: 5
         )
-        .scaleEffect(pillScale, anchor: .top)
-        .animation(transitionAnimation, value: model.state)
+        .animation(model.isOpened ? Self.openAnimation : Self.closeAnimation, value: model.state)
         .onHover { inside in
             withAnimation(.spring(response: 0.38, dampingFraction: 0.8)) {
                 hoveringPill = inside
@@ -91,19 +89,11 @@ struct IslandRootView: View {
         )
     }
 
-    private var pillScale: CGFloat {
-        guard !model.isOpened else { return 1.0 }
-        if model.state == .popping { return 1.04 }
-        if hoveringPill && model.state == .closed { return 1.03 }
-        return 1.0
-    }
-
-    private var transitionAnimation: Animation {
-        switch model.state {
-        case .opened: return Self.openAnimation
-        case .popping: return Self.popAnimation
-        case .closed: return Self.closeAnimation
-        }
+    /// Hovering the closed pill only highlights it — an accent edge plus the
+    /// shadow — with no scale or size change. A click is what opens it.
+    private var strokeOpacity: Double {
+        if model.isOpened { return 0.16 }
+        return hoveringPill ? 0.45 : 0
     }
 }
 

@@ -39,23 +39,16 @@ struct IslandProjectGroup: Identifiable, Equatable {
 enum IslandState: Equatable {
     case closed
     case opened
-    case popping // brief attention pop of the closed pill
-}
-
-enum IslandOpenReason: Equatable {
-    case hover
-    case click
-    case event // a suggestion forced the island open
 }
 
 /// Observable state driving the island's SwiftUI content. All mutation on main.
+///
+/// The island opens only when the user asks for it: a click on the closed pill,
+/// or a deliberate command-bar shortcut. Nothing opens, grows or pops it on its
+/// own — an arriving suggestion only raises the pill's badge count.
 @Observable
 final class IslandModel {
-    static let hoverOpenDelay: TimeInterval = 0.35
-    static let popDuration: TimeInterval = 1.4
-
     var state: IslandState = .closed
-    var openReason: IslandOpenReason?
 
     var rows: [IslandAgentRow] = []
     /// Claude/Codex rate-limit readouts, refreshed by `UsageSummaryStore`.
@@ -64,9 +57,9 @@ final class IslandModel {
     private(set) var usageReadouts: [UsageReadout] = []
     /// Index into `pillFrames` — advanced by the rotation timer.
     private(set) var pillUsageIndex = 0
-    /// Suggestions waiting on the user to pick an option. This is the island's
-    /// only attention signal — status notifications go to Notification Center
-    /// and are not mirrored here.
+    /// Suggestions waiting on the user to pick an option. The closed pill counts
+    /// them; they never open the island by themselves. Status notifications go
+    /// to Notification Center and are not mirrored here.
     var orders: [PendingOrder] = []
     /// Set when the control channel is down in a way the app cannot fix itself
     /// — practically always a second live instance owning the socket path.
@@ -99,19 +92,6 @@ final class IslandModel {
             .reversed())
     }
 
-    /// Whether newly-arrived cards are worth opening the island for.
-    ///
-    /// A card with nothing to decide is a notice and waits to be found. That
-    /// separates the two integration rounds worth telling apart: one that
-    /// dropped a conflicting worktree says so and stays put — it happens on
-    /// every round while two worktrees touch the same file — while one held
-    /// back, whose only way forward destroys what is in the checkout, pops.
-    /// Agent suggestions and questions always carry options, so this changes
-    /// nothing for them.
-    static func shouldOpen(for fresh: [PendingOrder]) -> Bool {
-        fresh.contains { !($0.action.options ?? []).isEmpty }
-    }
-
     /// Screen geometry, set by the panel controller.
     var notchWidth: CGFloat = 190
     var notchHeight: CGFloat = 38
@@ -142,7 +122,6 @@ final class IslandModel {
     /// One-shot: focus the command field without changing its text (double-Ctrl).
     var pendingCommandFocus: Bool = false
 
-    private var popRevertWork: DispatchWorkItem?
     private var usageRotationTimer: Timer?
 
     var isOpened: Bool { state == .opened }
@@ -151,31 +130,12 @@ final class IslandModel {
         usageRotationTimer?.invalidate()
     }
 
-    func open(reason: IslandOpenReason) {
-        popRevertWork?.cancel()
-        popRevertWork = nil
-        openReason = reason
+    func open() {
         state = .opened
     }
 
     func close() {
-        popRevertWork?.cancel()
-        popRevertWork = nil
-        openReason = nil
         state = .closed
-    }
-
-    /// Brief scale "pop" of the closed pill to draw attention to a new event.
-    func pop() {
-        guard state == .closed || state == .popping else { return }
-        state = .popping
-        popRevertWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, self.state == .popping else { return }
-            self.state = .closed
-        }
-        popRevertWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.popDuration, execute: work)
     }
 
     // MARK: - Usage readouts
@@ -232,17 +192,18 @@ final class IslandModel {
         usageRotationTimer = timer
     }
 
-    /// Extra width each wing takes on while a usage window is showing. Applied
-    /// to both wings so the centre spacer stays locked to the hardware notch.
-    var wingUsageWidth: CGFloat { pillUsage == nil ? 0 : Self.pillUsageWidth }
+    /// Width each wing reserves for a usage window. Keyed to whether usage data
+    /// exists at all, not to what the left wing is showing, so a suggestion
+    /// arriving or clearing swaps the wing's content without resizing the pill.
+    /// Applied to both wings so the centre spacer stays locked to the hardware notch.
+    var wingUsageWidth: CGFloat { pillFrames.isEmpty ? 0 : Self.pillUsageWidth }
 
     /// Width of the closed pill. On a notched display it is locked to the
     /// physical notch plus symmetric wings so it merges with the hardware
     /// notch; on external displays it is a fixed simulated-notch width.
     var closedWidth: CGFloat {
-        let popBonus: CGFloat = state == .popping ? 18 : 0
         let base = isNotchedDisplay ? notchWidth + 88 : min(360, notchWidth + 170)
-        return base + wingUsageWidth * 2 + popBonus
+        return base + wingUsageWidth * 2
     }
 
     /// Sessions needing attention first, then the rest — pill tile order.

@@ -6,6 +6,9 @@ import SwiftUI
 /// SwiftUI springs causes visible jank, so all morphing is done in SwiftUI
 /// inside this fixed transparent window. Clicks outside the current visual
 /// content pass through via `IslandHostingView.hitTest`.
+///
+/// The island opens only on a click on the closed pill or a deliberate
+/// command-bar shortcut — never on hover, and never by itself.
 final class IslandPanelController {
     static let maxOpenedContentHeight: CGFloat = 520
     private static let shadowInset: CGFloat = 24
@@ -14,12 +17,6 @@ final class IslandPanelController {
 
     private var panel: IslandPanel?
     private var eventMonitors = IslandEventMonitors()
-    private var hoverTimer: DispatchWorkItem?
-    private var eventAutoCloseTimer: DispatchWorkItem?
-    /// Pointer has entered the surface since an event-open — once engaged,
-    /// leaving the surface collapses it again.
-    private var eventOpenEngaged = false
-    private static let eventAutoCloseDelay: TimeInterval = 10
 
     func install() {
         guard panel == nil else { return }
@@ -62,8 +59,6 @@ final class IslandPanelController {
         panel.orderFrontRegardless()
 
         eventMonitors.start { [weak self] location in
-            self?.handleMouseMoved(location)
-        } mouseDownHandler: { [weak self] location in
             self?.handleMouseDown(location)
         }
 
@@ -123,50 +118,18 @@ final class IslandPanelController {
         guard let panel else { return }
         if !panel.isVisible { panel.orderFrontRegardless() }
         prepare()
-        model.open(reason: .click)
+        model.open()
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKey()
     }
 
-    /// Auto-expand for an arriving suggestion so the card is visible without
-    /// hovering. Collapses again after a timeout if the pointer never comes,
-    /// or as soon as it leaves after having engaged.
-    ///
-    /// Suppressed only when the user is already looking at the card: seahelm
-    /// frontmost AND the raising pane's worktree on screen, where the First Mate
-    /// sidebar carries it. Frontmost on a *different* worktree still pops —
-    /// that sidebar shows its own worktree's cards, so nothing else would
-    /// surface this one and it used to arrive silently.
-    func openForEvent(targetVisible: Bool) {
-        guard !(NSApp.isActive && targetVisible) else { return }
-        guard let panel, !model.isOpened else { return }
-        if !panel.isVisible { updateVisibility() }
-        guard panel.isVisible else { return }
-        eventOpenEngaged = false
-        model.open(reason: .event)
-        scheduleEventAutoClose()
-    }
-
-    private func scheduleEventAutoClose() {
-        eventAutoCloseTimer?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, self.model.isOpened, self.model.openReason == .event,
-                  !self.eventOpenEngaged else { return }
-            self.model.close()
-        }
-        eventAutoCloseTimer = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.eventAutoCloseDelay, execute: work)
-    }
-
     /// Hide the island while the target screen is in a fullscreen space —
     /// the pill's wings (and the whole simulated notch on external displays)
-    /// would otherwise sit on top of the fullscreen app. A pending
-    /// suggestion overrides the hide: it is actionable and time-sensitive.
+    /// would otherwise sit on top of the fullscreen app. Pending suggestions
+    /// don't override this: the island never puts itself in front of the user.
     func updateVisibility() {
         guard let panel, let screen = targetScreen() else { return }
-        let fullscreen = Self.hasFullscreenWindow(on: screen)
-        let shouldShow = !fullscreen || !model.orders.isEmpty
-        if shouldShow {
+        if !Self.hasFullscreenWindow(on: screen) {
             if !panel.isVisible { panel.orderFrontRegardless() }
         } else if panel.isVisible {
             model.close()
@@ -307,32 +270,12 @@ final class IslandPanelController {
 
     // MARK: - Mouse handling
 
-    private func handleMouseMoved(_ location: NSPoint) {
-        // Hidden panel (fullscreen space): nothing to hover or engage.
-        guard panel?.isVisible == true else { return }
-        let inPill = !model.isOpened && (visibleContentRect()?.insetBy(dx: -8, dy: -4).contains(location) ?? false)
-        if inPill {
-            scheduleHoverOpen()
-        } else {
-            hoverTimer?.cancel()
-            hoverTimer = nil
-        }
-
-        // Event-opened surface: engage on enter, collapse on leave.
-        if model.isOpened, model.openReason == .event,
-           let rect = visibleContentRect() {
-            let inside = rect.insetBy(dx: -12, dy: -12).contains(location)
-            if inside {
-                eventOpenEngaged = true
-                eventAutoCloseTimer?.cancel()
-            } else if eventOpenEngaged {
-                model.close()
-            }
-        }
-    }
-
+    /// The only pointer path into the island: a click on the closed pill opens
+    /// it, a click outside the opened surface closes it. Hovering only
+    /// highlights the pill (see `IslandRootView`).
     private func handleMouseDown(_ location: NSPoint) {
-        guard let rect = visibleContentRect() else { return }
+        // Hidden panel (fullscreen space): there is no pill to click.
+        guard panel?.isVisible == true, let rect = visibleContentRect() else { return }
         if model.isOpened {
             if !rect.contains(location) {
                 // The panel isn't key (becomesKeyOnlyIfNeeded), so this click
@@ -340,24 +283,9 @@ final class IslandPanelController {
                 model.close()
             }
         } else if rect.contains(location) {
-            hoverTimer?.cancel()
-            hoverTimer = nil
-            model.open(reason: .click)
+            model.open()
         }
     }
-
-    private func scheduleHoverOpen() {
-        guard hoverTimer == nil, !model.isOpened else { return }
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, !self.model.isOpened else { return }
-            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
-            self.model.open(reason: .hover)
-            self.hoverTimer = nil
-        }
-        hoverTimer = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + IslandModel.hoverOpenDelay, execute: work)
-    }
-
 }
 
 // MARK: - IslandPanel
@@ -417,32 +345,14 @@ private final class IslandHostingView<Content: View>: NSHostingView<Content> {
 
 // MARK: - IslandEventMonitors
 
+/// Left-click monitors only: the island reacts to clicks, not pointer movement.
 private final class IslandEventMonitors {
     private var monitors: [Any] = []
 
-    func start(
-        mouseMoveHandler: @escaping (NSPoint) -> Void,
-        mouseDownHandler: @escaping (NSPoint) -> Void
-    ) {
+    func start(mouseDownHandler: @escaping (NSPoint) -> Void) {
         guard monitors.isEmpty else { return }
-        var lastMove: TimeInterval = 0
-        let throttle: TimeInterval = 0.05
-
-        let onMove: (NSEvent) -> Void = { _ in
-            let now = ProcessInfo.processInfo.systemUptime
-            guard now - lastMove >= throttle else { return }
-            lastMove = now
-            mouseMoveHandler(NSEvent.mouseLocation)
-        }
         let onDown: (NSEvent) -> Void = { _ in
             mouseDownHandler(NSEvent.mouseLocation)
-        }
-
-        if let m = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved, handler: onMove) {
-            monitors.append(m)
-        }
-        if let m = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved, handler: { onMove($0); return $0 }) {
-            monitors.append(m)
         }
         if let m = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown, handler: onDown) {
             monitors.append(m)

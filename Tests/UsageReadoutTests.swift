@@ -70,10 +70,10 @@ final class UsageReadoutTests: XCTestCase {
         XCTAssertEqual(model.wingUsageWidth, IslandModel.pillUsageWidth)
     }
 
-    /// A waiting suggestion owns the left wing — usage steps aside, and the
-    /// pill must shrink back with it.
+    /// A waiting suggestion owns the left wing — usage steps aside — but the pill
+    /// keeps its size: the island never grows or shrinks on its own.
     @MainActor
-    func testPendingOrderSuppressesPillUsageAndItsWidth() {
+    func testPendingOrderTakesTheLeftWingWithoutResizingThePill() {
         let model = IslandModel()
         model.setUsageReadouts(UsageSummaryFormatter.readouts(
             claude: claudeSnapshot(fiveHour: 11, sevenDay: 2),
@@ -88,7 +88,10 @@ final class UsageReadoutTests: XCTestCase {
         ))]
 
         XCTAssertNil(model.pillUsage)
-        XCTAssertEqual(model.wingUsageWidth, 0)
-        XCTAssertEqual(model.closedWidth, widthWithUsage - IslandModel.pillUsageWidth * 2)
+        XCTAssertEqual(model.wingUsageWidth, IslandModel.pillUsageWidth)
+        XCTAssertEqual(model.closedWidth, widthWithUsage)
+
+        model.orders = []
+        XCTAssertEqual(model.closedWidth, widthWithUsage)
     }
 }

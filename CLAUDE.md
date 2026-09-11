@@ -74,7 +74,7 @@ The project uses XcodeGen (`project.yml`) to generate the Xcode project file. Af
    - `Diff/` — Code-review diff viewer (`DiffReviewView` + `DiffSyntaxHighlighter`)
    - `Helm/` — `GrowingTextView` (extracted from the former `CommandInputView`), the keyboard-help overlay and the shortcut hint bar. The command line itself is the Island's (`Island/OpenedSurfaceView`, `/ @ #` autocomplete); the sidebar has no composer.
    - `StatusBar/` — Fixed 26pt bottom bar: mode indicator, global Claude/Codex usage, notification summary, shortcuts
-   - `Island/` — Floating "dynamic island" panel (morphs closed pill ↔ open surface) for notifications/status
+   - `Island/` — Floating "dynamic island" panel (morphs closed pill ↔ open surface) for notifications/status. Opens only on a click on the pill or a deliberate command-bar shortcut — never on hover or by itself (suggestions just raise the pill's badge), and the closed pill keeps a fixed width
    - `Settings/`, `Onboarding/` — Tabbed settings window and the first-run wizard
 
 3. **Core Services** (`Sources/Core/`, `Sources/Status/`)

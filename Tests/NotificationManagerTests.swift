@@ -220,8 +220,8 @@ final class NotificationManagerTests: XCTestCase {
     // MARK: - Banner suppression
 
     func testBannerFiresWhenAppIsInBackgroundEvenWithACardOnScreen() {
-        // The island collapses on its own after ten seconds and may never have
-        // been seen — in the background the banner is the only durable record.
+        // An open island is one the user may have walked away from — in the
+        // background the banner is the only durable record.
         XCTAssertFalse(NotificationManager.shouldSuppressBanner(
             appActive: false, targetVisible: true, cardOnScreen: true))
     }

@@ -102,25 +102,6 @@ final class PendingOrdersQueueTests: XCTestCase {
         XCTAssertTrue(IslandModel.newestSuggestions(from: q.all()).isEmpty)
     }
 
-    /// A round that dropped a conflicting worktree is a notice and waits to be
-    /// found — it happens on every round while two worktrees touch the same
-    /// file. A round held back, whose only way forward destroys what is in the
-    /// checkout, pops the island.
-    func testOnlyACardWithSomethingToDecideOpensTheIsland() {
-        let notice = PendingOrder(id: "n", action: FirstMateAction(
-            kind: .integrationReport, zone: .red, worktreePath: "/wt/i", branch: "",
-            project: "p", terminalID: "", message: "excluded b"))
-        let decision = PendingOrder(id: "d", action: FirstMateAction(
-            kind: .integrationReport, zone: .red, worktreePath: "/wt/i", branch: "",
-            project: "p", terminalID: "", message: "held",
-            options: ["Discard edits & update", "Leave it"]))
-
-        XCTAssertFalse(IslandModel.shouldOpen(for: [notice]))
-        XCTAssertTrue(IslandModel.shouldOpen(for: [decision]))
-        XCTAssertTrue(IslandModel.shouldOpen(for: [notice, decision]))
-        XCTAssertFalse(IslandModel.shouldOpen(for: []))
-    }
-
     func testIslandSuggestionsAreNewestFirst() {
         let q = PendingOrdersQueue()
         q.upsert(action(.suggestNextOrder, wt: "/wt/a"))
