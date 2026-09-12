@@ -72,6 +72,8 @@ struct WorktreeRowInfo {
     let currentPaneRunTime: String
     /// Per-pane rows for the expanded "Group by Pane" mode (leaf order).
     var panes: [PaneDisplayInfo] = []
+    /// The row's ribbon colour, from `WorktreeLabelStore`. Nil = unlabelled.
+    var label: SessionLabel?
 
     /// Rolled-up status for display/grouping. Computed once by the aggregator —
     /// the pane that changed status most recently — and carried here rather than
@@ -340,6 +342,12 @@ class DashboardViewController: NSViewController {
         // Row context menu → the delegate's assess-then-tear-down path.
         overviewView.onDeleteWorktree = { [weak self] path in
             self?.dashboardDelegate?.dashboardDidRequestDeleteWorktree(path: path)
+        }
+        // Labels are local polish with their own store, so they neither travel
+        // through the coordinators nor wait for the next list rebuild.
+        overviewView.onSetLabel = { [weak self] path, label in
+            WorktreeLabelStore.shared.set(label, forWorktree: path)
+            self?.overviewView.setLabel(label, forWorktree: path)
         }
         overviewView.onReturnWorktree = { [weak self] path in
             self?.dashboardDelegate?.dashboardDidRequestReturnWorktree(path: path)
