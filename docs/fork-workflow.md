@@ -13,7 +13,7 @@ Examples: the island opening only on click, fixed pill width, no auto-expand.
 - **Branch:** `mine/<topic>`, cut from `main` (the fork's).
 - **Commit trailer:** `Fork-Only: yes` — so a later cherry-pick spree can't sweep it upstream by mistake.
 - **Lands in:** the fork's `main` only.
-- **Never:** cherry-picked into a branch that becomes an upstream PR.
+- **Upstream:** never as an unsolicited PR. It can still be *suggested* as an issue on request — describe it, link the fork commit, and open a PR only if the maintainer asks (session labels → BetaYao/seahelm#128).
 
 ## Lane B — fixes for the original repo
 
