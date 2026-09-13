@@ -613,6 +613,105 @@ final class DashboardOverviewGroupingTests: XCTestCase {
         }
     }
 
+    // MARK: - Collapsing a group
+
+    private func threeRowView(_ defaults: UserDefaults) -> DashboardOverviewView {
+        let view = DashboardOverviewView(frame: NSRect(x: 0, y: 0, width: 600, height: 600),
+                                         defaults: defaults,
+                                         now: { self.now })
+        view.update([
+            makePane(name: "a", project: "alpha", worktreePath: "/a",
+                     paneStatuses: [.idle], isMainWorktree: false,
+                     lastActivityAt: now.addingTimeInterval(-100)),
+            makePane(name: "b", project: "bravo", worktreePath: "/b",
+                     paneStatuses: [.idle], isMainWorktree: false,
+                     lastActivityAt: now.addingTimeInterval(-200)),
+            makePane(name: "c", project: "bravo", worktreePath: "/c",
+                     paneStatuses: [.idle], isMainWorktree: false,
+                     lastActivityAt: now.addingTimeInterval(-300)),
+        ])
+        return view
+    }
+
+    /// Folding hides the rows but keeps them in `orderedRows` — that list is the
+    /// window-wide ⌃⇥ ring, and dropping entries from it would change cycling
+    /// everywhere.
+    func testCollapsingAGroupHidesItsRowsButKeepsTheCruiseRing() {
+        withDefaults { defaults in
+            let view = threeRowView(defaults)
+            XCTAssertEqual(view.visibleRowIDsForTesting.sorted(), ["/a", "/b", "/c"])
+
+            view.toggleGroupCollapseForTesting(.repository("bravo"))
+
+            XCTAssertEqual(view.visibleRowIDsForTesting, ["/a"])
+            XCTAssertEqual(view.orderedRows.map(\.id).sorted(), ["/a", "/b", "/c"],
+                           "folded rows must stay in the cruise ring")
+            XCTAssertEqual(view.collapsedGroupIDsForTesting, ["repository:bravo"])
+            XCTAssertEqual(view.collapseButtonGroupsForTesting,
+                           ["repository:alpha", "repository:bravo"],
+                           "every group gets a chevron")
+        }
+    }
+
+    func testCollapseTogglesBackAndForcesAFullRender() {
+        withDefaults { defaults in
+            let view = threeRowView(defaults)
+            let rendersBefore = view.fullRenderCountForTesting
+
+            view.toggleGroupCollapseForTesting(.repository("bravo"))
+            XCTAssertEqual(view.fullRenderCountForTesting, rendersBefore + 1,
+                           "collapse is structure the signature cannot describe")
+
+            view.toggleGroupCollapseForTesting(.repository("bravo"))
+            XCTAssertEqual(view.visibleRowIDsForTesting.sorted(), ["/a", "/b", "/c"])
+            XCTAssertEqual(view.collapsedGroupIDsForTesting, [])
+        }
+    }
+
+    /// Collapse is remembered across launches: a second view over the same
+    /// defaults comes up folded.
+    func testCollapsedGroupsSurviveARelaunch() {
+        withDefaults { defaults in
+            let first = threeRowView(defaults)
+            first.toggleGroupCollapseForTesting(.repository("bravo"))
+
+            let second = threeRowView(defaults)
+
+            XCTAssertEqual(second.collapsedGroupIDsForTesting, ["repository:bravo"])
+            XCTAssertEqual(second.visibleRowIDsForTesting, ["/a"])
+        }
+    }
+
+    /// Scrolling to a row inside a folded group is a silent no-op, so cycling
+    /// into one unfolds it instead.
+    func testCyclingIntoAFoldedGroupUnfoldsIt() {
+        withDefaults { defaults in
+            let view = threeRowView(defaults)
+            view.selectedId = "/a"
+            view.toggleGroupCollapseForTesting(.repository("bravo"))
+            XCTAssertFalse(view.visibleRowIDsForTesting.contains("/b"))
+
+            XCTAssertTrue(view.moveSelection(to: "/b", animated: false))
+
+            XCTAssertEqual(view.collapsedGroupIDsForTesting, [])
+            XCTAssertTrue(view.visibleRowIDsForTesting.contains("/b"))
+            XCTAssertEqual(view.selectedId, "/b")
+        }
+    }
+
+    func testCollapsedGroupsPreferenceRoundTripsAndDefaultsToEmpty() {
+        withDefaults { defaults in
+            let preference = WorktreeCollapsedGroupsPreference(defaults: defaults)
+            XCTAssertEqual(preference.load(), [])
+
+            let folded: Set<String> = [WorktreeGroupID.repository("alpha").wire,
+                                       WorktreeGroupID.repository("bravo").wire]
+            preference.save(folded)
+
+            XCTAssertEqual(WorktreeCollapsedGroupsPreference(defaults: defaults).load(), folded)
+        }
+    }
+
     private func withDefaults(_ body: (UserDefaults) -> Void) {
         let suite = "DashboardOverviewGroupingTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

@@ -135,6 +135,14 @@ final class DashboardOverviewView: NSView {
     private static let addWorktreeButtonIdentifier = NSUserInterfaceItemIdentifier("seahelm.addWorktree")
     private static let integrateButtonIdentifier = NSUserInterfaceItemIdentifier("seahelm.integrate")
     private static let closeProjectButtonIdentifier = NSUserInterfaceItemIdentifier("seahelm.closeProject")
+    private static let collapseButtonIdentifier = NSUserInterfaceItemIdentifier("seahelm.collapseGroup")
+    private let collapsePreference: WorktreeCollapsedGroupsPreference
+    /// Groups the user folded away, by `WorktreeGroupID.wire`.
+    private var collapsedGroupIDs: Set<String> = []
+    /// Group ids behind the rendered chevrons, indexed by button tag.
+    private var collapseGroupIDs: [WorktreeGroupID] = []
+    /// Which group each rendered row sits in, so a reveal can unfold it.
+    private var groupWireByRowID: [String: String] = [:]
     private var revealedRowID: String?
     /// The one row currently painting the hover tint, if any.
     private weak var hoveredRow: FleetHoverRow?
@@ -151,6 +159,9 @@ final class DashboardOverviewView: NSView {
     override init(frame frameRect: NSRect) {
         let preference = WorktreeGroupingPreference(defaults: .standard)
         groupingPreference = preference
+        let collapsed = WorktreeCollapsedGroupsPreference(defaults: .standard)
+        collapsePreference = collapsed
+        collapsedGroupIDs = collapsed.load()
         now = Date.init
         isIntegrationWorktree = { IntegrationWorktreeStore.shared.isIntegrationWorktree($0) }
         integrationStatus = { IntegrationStatusStore.shared.status(forWorktree: $0) }
@@ -162,6 +173,9 @@ final class DashboardOverviewView: NSView {
     required init?(coder: NSCoder) {
         let preference = WorktreeGroupingPreference(defaults: .standard)
         groupingPreference = preference
+        let collapsed = WorktreeCollapsedGroupsPreference(defaults: .standard)
+        collapsePreference = collapsed
+        collapsedGroupIDs = collapsed.load()
         now = Date.init
         isIntegrationWorktree = { IntegrationWorktreeStore.shared.isIntegrationWorktree($0) }
         integrationStatus = { IntegrationStatusStore.shared.status(forWorktree: $0) }
@@ -181,6 +195,9 @@ final class DashboardOverviewView: NSView {
     ) {
         let preference = WorktreeGroupingPreference(defaults: defaults)
         groupingPreference = preference
+        let collapsed = WorktreeCollapsedGroupsPreference(defaults: defaults)
+        collapsePreference = collapsed
+        collapsedGroupIDs = collapsed.load()
         self.now = now
         self.isIntegrationWorktree = isIntegrationWorktree
         self.integrationStatus = integrationStatus
@@ -590,6 +607,8 @@ final class DashboardOverviewView: NSView {
         addWorktreeProjects = []
         integrateProjects = []
         closeProjectProjects = []
+        collapseGroupIDs = []
+        groupWireByRowID = [:]
         revealedRowID = nil
 
         for (groupIndex, group) in groups.enumerated() {
@@ -622,6 +641,7 @@ final class DashboardOverviewView: NSView {
                 row.widthAnchor.constraint(equalTo: rowsBox.widthAnchor).isActive = true
                 orderedRows.append((groupedItem.id, groupedItem.path))
                 rowViewsByID[groupedItem.id] = row
+                groupWireByRowID[groupedItem.id] = group.id.wire
 
                 // Fully-expanded third level: one clickable row per pane. A
                 // single-pane worktree is already represented by its own row, so
@@ -644,11 +664,22 @@ final class DashboardOverviewView: NSView {
                     }
                 }
             }
+            // Folded groups keep their rows built and hidden: `orderedRows` is
+            // the window-wide ⌃⇥ ring and the incremental path rebuilds it from
+            // every group, so skipping rows would desync the two paths.
+            rowsBox.isHidden = collapsedGroupIDs.contains(group.id.wire)
             stack.addArrangedSubview(rowsBox)
             pin(rowsBox)
         }
 
         if revealSelection, let selectedRow = rowViewsByID[selectedId] {
+            if selectedRow.isHiddenOrHasHiddenAncestor {
+                // One level only: the group is expanded before the second pass.
+                expandGroupContaining(rowID: selectedId)
+                lastStructureSignature = nil
+                render(panes, revealSelection: true, changedWorktreePath: changedWorktreePath)
+                return
+            }
             layoutSubtreeIfNeeded()
             selectedRow.scrollToVisible(selectedRow.bounds)
             revealedRowID = selectedId
@@ -687,6 +718,10 @@ final class DashboardOverviewView: NSView {
         changedWorktreePath: String? = nil
     ) {
         orderedRows = groups.flatMap { group in group.items.map { ($0.id, $0.path) } }
+        groupWireByRowID = Dictionary(
+            groups.flatMap { group in group.items.map { ($0.id, group.id.wire) } },
+            uniquingKeysWith: { first, _ in first }
+        )
         renderedGroupTitles = groups.map(\.title)
 
         for group in groups {
@@ -764,6 +799,15 @@ final class DashboardOverviewView: NSView {
     func moveSelection(to id: String, animated: Bool) -> Bool {
         guard let target = rowViewsByID[id] else { return false }
         guard id != selectedId else { return true }
+        // ⌃⇥ into a folded group unfolds it rather than animating to a row
+        // nobody can see.
+        if target.isHiddenOrHasHiddenAncestor {
+            expandGroupContaining(rowID: id)
+            selectedId = id
+            lastStructureSignature = nil
+            render(latestPanes, revealSelection: true)
+            return true
+        }
         rowViewsByID[selectedId]?.setSelected(false, animated: animated)
         target.setSelected(true, animated: animated)
         selectedId = id
@@ -872,6 +916,18 @@ final class DashboardOverviewView: NSView {
     func setLabel(_ label: SessionLabel?, forWorktree path: String) {
         rowViewsByID[path]?.applyLabel(label)
     }
+    /// Groups currently folded away, by wire id, sorted for determinism.
+    var collapsedGroupIDsForTesting: [String] { collapsedGroupIDs.sorted() }
+    /// Rows actually on screen. `orderedRows` deliberately keeps folded rows.
+    var visibleRowIDsForTesting: [String] {
+        orderedRows.map(\.id).filter { rowViewsByID[$0]?.isHiddenOrHasHiddenAncestor == false }
+    }
+    func toggleGroupCollapseForTesting(_ id: WorktreeGroupID) { toggleCollapse(id) }
+    /// Group ids behind the rendered chevrons, in group order.
+    var collapseButtonGroupsForTesting: [String] {
+        headerButtons(matching: Self.collapseButtonIdentifier)
+            .compactMap { collapseGroupIDs[safeIndex: $0.tag]?.wire }
+    }
     var renderedSelectedRowIDForTesting: String? { rowViewsByID[selectedId] == nil ? nil : selectedId }
     /// Ids of every row currently painting the hover tint — more than one means
     /// the scroll-leaves-a-trail bug is back.
@@ -897,8 +953,56 @@ final class DashboardOverviewView: NSView {
         v.trailingAnchor.constraint(equalTo: stack.trailingAnchor, constant: -15).isActive = true
     }
 
+    /// Chevron at the head of a group row: folds the group away, and unfolds it.
+    private func makeCollapseButton(group: WorktreeGroup, collapsed: Bool) -> NSButton {
+        let button = NSButton(title: "", target: self, action: #selector(collapseButtonClicked(_:)))
+        button.isBordered = false
+        button.bezelStyle = .inline
+        button.refusesFirstResponder = true
+        button.identifier = Self.collapseButtonIdentifier
+        button.image = NSImage(systemSymbolName: collapsed ? "chevron.right" : "chevron.down",
+                               accessibilityDescription: nil)
+        if button.image == nil { button.title = collapsed ? "\u{25B8}" : "\u{25BE}" }
+        button.contentTintColor = Self.inkFaint
+        button.toolTip = collapsed ? "Show this group's sessions" : "Hide this group's sessions"
+        button.setAccessibilityLabel(collapsed ? "Expand group" : "Collapse group")
+        button.tag = collapseGroupIDs.count
+        collapseGroupIDs.append(group.id)
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
+        return button
+    }
+
+    @objc private func collapseButtonClicked(_ sender: NSButton) {
+        guard let id = collapseGroupIDs[safeIndex: sender.tag] else { return }
+        toggleCollapse(id)
+    }
+
+    /// Fold or unfold a group. Collapse is structure the signature does not
+    /// describe, so it forces a full render — same reasoning as `integrationEnabled`.
+    private func toggleCollapse(_ id: WorktreeGroupID) {
+        let wire = id.wire
+        if collapsedGroupIDs.contains(wire) {
+            collapsedGroupIDs.remove(wire)
+        } else {
+            collapsedGroupIDs.insert(wire)
+        }
+        collapsePreference.save(collapsedGroupIDs)
+        lastStructureSignature = nil
+        render(latestPanes, revealSelection: false)
+    }
+
+    /// Unfold the group holding `rowID`. Scrolling to a row inside a folded
+    /// group is a silent no-op, so every reveal path checks this first.
+    private func expandGroupContaining(rowID: String) {
+        guard let wire = groupWireByRowID[rowID], collapsedGroupIDs.contains(wire) else { return }
+        collapsedGroupIDs.remove(wire)
+        collapsePreference.save(collapsedGroupIDs)
+    }
+
     private func makeGroupHeader(group: WorktreeGroup, topGap: CGFloat) -> NSView {
-        var views: [NSView] = []
+        let isCollapsed = collapsedGroupIDs.contains(group.id.wire)
+        var views: [NSView] = [makeCollapseButton(group: group, collapsed: isCollapsed)]
         if let status = group.status {
             if status == .running {
                 views.append(SpinnerDotView(color: status.color))
@@ -925,6 +1029,15 @@ final class DashboardOverviewView: NSView {
             title.textColor = Self.inkDim
             title.lineBreakMode = .byTruncatingTail
             views.append(title)
+            if isCollapsed {
+                // Folded, so say what is inside — otherwise the header reads as
+                // a project with nothing in it.
+                let count = NSTextField(labelWithString:
+                    group.items.count == 1 ? "1 session" : "\(group.items.count) sessions")
+                count.font = AppFont.mono(size: 11)
+                count.textColor = Self.inkFaint
+                views.append(count)
+            }
         }
 
         // Project groups (Group by Project / Expand All Panes) carry a trailing
@@ -961,20 +1074,25 @@ final class DashboardOverviewView: NSView {
         } else {
             projectName = nil
         }
-        let header = GroupHeaderView(contentRow: row, projectName: projectName)
+        let header = GroupHeaderView(contentRow: row, projectName: projectName, groupID: group.id)
         header.onCloseProject = { [weak self] project in self?.onCloseProject?(project) }
+        header.onToggleCollapse = { [weak self] id in self?.toggleCollapse(id) }
         return header
     }
 
     /// Project group header — carries a context menu to close/untrack the repo.
     private final class GroupHeaderView: NSView {
         var onCloseProject: ((String) -> Void)?
+        /// Clicking the header anywhere but its buttons folds the group.
+        var onToggleCollapse: ((WorktreeGroupID) -> Void)?
         private let projectName: String?
+        private let groupID: WorktreeGroupID
         private let contentRow: NSStackView
 
-        init(contentRow: NSStackView, projectName: String?) {
+        init(contentRow: NSStackView, projectName: String?, groupID: WorktreeGroupID) {
             self.contentRow = contentRow
             self.projectName = projectName
+            self.groupID = groupID
             super.init(frame: .zero)
             addSubview(contentRow)
             contentRow.translatesAutoresizingMaskIntoConstraints = false
@@ -989,6 +1107,12 @@ final class DashboardOverviewView: NSView {
             }
         }
         required init?(coder: NSCoder) { fatalError() }
+
+        /// The buttons swallow their own clicks, so anything arriving here is a
+        /// click on the title or the space beside it.
+        override func mouseDown(with event: NSEvent) {
+            onToggleCollapse?(groupID)
+        }
 
         var projectNameForTesting: String? { projectName }
         var contentRowForTesting: NSStackView { contentRow }

@@ -249,6 +249,29 @@ struct WorktreeGroupingPreference {
     }
 }
 
+/// Which groups the user has folded away in the fleet list, by
+/// `WorktreeGroupID.wire`. View state, so it sits in defaults beside the
+/// grouping mode rather than in config.json.
+struct WorktreeCollapsedGroupsPreference {
+    static let key = "seahelm.dashboard.collapsedWorktreeGroups"
+
+    let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    func load() -> Set<String> {
+        Set(defaults.stringArray(forKey: Self.key) ?? [])
+    }
+
+    func save(_ ids: Set<String>) {
+        // Sorted so two launches that folded the same groups in a different
+        // order still write the same value.
+        defaults.set(ids.sorted(), forKey: Self.key)
+    }
+}
+
 // MARK: - Wire format
 
 /// Remote clients render the same groups the dashboard does. Grouping stays a
